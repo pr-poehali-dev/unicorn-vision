@@ -4,6 +4,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import Icon from '@/components/ui/icon'
 
+interface PingRecord {
+  time: string
+  online: boolean
+  responseTime: number | null
+}
+
 interface Device {
   id: string
   ip: string
@@ -17,6 +23,8 @@ interface Device {
   w: number
   h: number
 }
+
+const MAX_HISTORY = 60
 
 const TYPE_ICONS: Record<Device['type'], string> = {
   workstation: 'Monitor',
@@ -62,6 +70,8 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const canvasRef = useRef<HTMLDivElement>(null)
   const [devices, setDevices] = useState<Device[]>(INITIAL_DEVICES)
+  const [history, setHistory] = useState<Record<string, PingRecord[]>>({})
+  const [chartDeviceId, setChartDeviceId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -124,12 +134,17 @@ export default function Dashboard() {
         for (const r of data.results) {
           map[r.ip] = { online: r.online, responseTime: r.responseTime ?? Math.round(Math.random() * 80 + 5) }
         }
-        setDevices(prev => prev.map(d => ({
-          ...d,
-          online: map[d.ip]?.online ?? false,
-          responseTime: map[d.ip]?.responseTime ?? null,
-          lastSeen: map[d.ip]?.online ? now() : d.lastSeen,
-        })))
+        setDevices(prev => {
+          const updates: { id: string; online: boolean; responseTime: number | null }[] = []
+          const next = prev.map(d => {
+            const online = map[d.ip]?.online ?? false
+            const responseTime = map[d.ip]?.responseTime ?? null
+            updates.push({ id: d.id, online, responseTime })
+            return { ...d, online, responseTime, lastSeen: online ? now() : d.lastSeen }
+          })
+          appendHistory(updates)
+          return next
+        })
       } else {
         simulatePing()
       }
@@ -141,11 +156,26 @@ export default function Dashboard() {
     }
   }, [])
 
+  const appendHistory = (updates: { id: string; online: boolean; responseTime: number | null }[]) => {
+    setHistory(prev => {
+      const next = { ...prev }
+      for (const u of updates) {
+        const rec: PingRecord = { time: now(), online: u.online, responseTime: u.responseTime }
+        next[u.id] = [...(prev[u.id] ?? []).slice(-(MAX_HISTORY - 1)), rec]
+      }
+      return next
+    })
+  }
+
   const simulatePing = () => {
+    const updates: { id: string; online: boolean; responseTime: number | null }[] = []
     setDevices(prev => prev.map(d => {
       const online = Math.random() > 0.25
-      return { ...d, online, responseTime: online ? Math.round(Math.random() * 80 + 5) : null, lastSeen: online ? now() : d.lastSeen }
+      const responseTime = online ? Math.round(Math.random() * 80 + 5) : null
+      updates.push({ id: d.id, online, responseTime })
+      return { ...d, online, responseTime, lastSeen: online ? now() : d.lastSeen }
     }))
+    appendHistory(updates)
     setLastUpdate(now())
   }
 
@@ -411,6 +441,17 @@ export default function Dashboard() {
                   <Icon name={isEditing ? 'Check' : 'Pencil'} size={11} />
                 </button>
 
+                {/* Chart button */}
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => setChartDeviceId(device.id)}
+                  style={{ position: 'absolute', bottom: 6, left: 30, color: '#444', transition: 'color 0.2s' }}
+                  className="hover:text-blue-400"
+                  title="График доступности"
+                >
+                  <Icon name="BarChart2" size={11} />
+                </button>
+
                 {/* Resize handle */}
                 <div
                   data-resize="true"
@@ -428,6 +469,132 @@ export default function Dashboard() {
           })}
         </div>
       </div>
+
+      {/* Chart modal */}
+      {chartDeviceId && (() => {
+        const dev = devices.find(d => d.id === chartDeviceId)
+        const recs = history[chartDeviceId] ?? []
+        if (!dev) return null
+
+        const W = 520, H = 160, PAD = 10
+        const innerW = W - PAD * 2
+        const innerH = H - PAD * 2
+        const uptime = recs.length ? Math.round(recs.filter(r => r.online).length / recs.length * 100) : null
+
+        // Response time chart
+        const rtRecs = recs.filter(r => r.responseTime !== null)
+        const maxRt = rtRecs.length ? Math.max(...rtRecs.map(r => r.responseTime!), 1) : 1
+
+        const rtPoints = rtRecs.map((r, i) => {
+          const x = PAD + (i / Math.max(rtRecs.length - 1, 1)) * innerW
+          const y = PAD + innerH - (r.responseTime! / maxRt) * innerH
+          return `${x},${y}`
+        }).join(' ')
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4"
+            onClick={() => setChartDeviceId(null)}
+          >
+            <div
+              className="bg-[#161616] border border-neutral-700 rounded-2xl p-6 w-full max-w-lg"
+              onClick={e => e.stopPropagation()}
+              style={{ boxShadow: '0 0 40px rgba(0,0,0,0.7)' }}
+            >
+              {/* Title */}
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-2">
+                  <Icon name={TYPE_ICONS[dev.type]} size={16} className="text-neutral-400" />
+                  <span className="font-semibold text-white">{dev.name}</span>
+                  <code className="text-neutral-500 text-xs ml-1">{dev.ip}</code>
+                </div>
+                <button onClick={() => setChartDeviceId(null)} className="text-neutral-600 hover:text-white transition-colors">
+                  <Icon name="X" size={16} />
+                </button>
+              </div>
+
+              {/* Stats row */}
+              <div className="grid grid-cols-3 gap-3 mb-5">
+                <div className="bg-neutral-900 rounded-xl p-3 text-center">
+                  <div className={`text-xl font-bold ${dev.online ? 'text-green-400' : dev.online === false ? 'text-red-400' : 'text-neutral-500'}`}>
+                    {dev.online === true ? 'Online' : dev.online === false ? 'Offline' : '—'}
+                  </div>
+                  <div className="text-neutral-600 text-xs mt-0.5">Статус</div>
+                </div>
+                <div className="bg-neutral-900 rounded-xl p-3 text-center">
+                  <div className="text-xl font-bold text-blue-400">{uptime !== null ? `${uptime}%` : '—'}</div>
+                  <div className="text-neutral-600 text-xs mt-0.5">Uptime</div>
+                </div>
+                <div className="bg-neutral-900 rounded-xl p-3 text-center">
+                  <div className="text-xl font-bold text-yellow-400">{dev.responseTime ? `${dev.responseTime} мс` : '—'}</div>
+                  <div className="text-neutral-600 text-xs mt-0.5">Отклик</div>
+                </div>
+              </div>
+
+              {/* Status timeline */}
+              <div className="mb-4">
+                <div className="text-neutral-500 text-xs mb-2">История доступности (последние {recs.length} проверок)</div>
+                {recs.length === 0 ? (
+                  <div className="text-neutral-700 text-sm text-center py-4">Данных пока нет — ждём первых проверок</div>
+                ) : (
+                  <div className="flex gap-0.5 flex-wrap">
+                    {recs.map((r, i) => (
+                      <div
+                        key={i}
+                        title={`${r.time} — ${r.online ? 'Online' : 'Offline'}`}
+                        style={{
+                          width: 10, height: 24, borderRadius: 3,
+                          background: r.online ? '#22c55e' : '#ef4444',
+                          opacity: 0.85,
+                          flexShrink: 0,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Response time chart */}
+              <div>
+                <div className="text-neutral-500 text-xs mb-2">Время отклика (мс)</div>
+                {rtRecs.length < 2 ? (
+                  <div className="text-neutral-700 text-sm text-center py-4">Недостаточно данных для графика</div>
+                ) : (
+                  <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', background: '#0f0f0f', borderRadius: 8 }}>
+                    {/* Grid lines */}
+                    {[0, 0.25, 0.5, 0.75, 1].map(t => (
+                      <line key={t} x1={PAD} y1={PAD + innerH * (1 - t)} x2={W - PAD} y2={PAD + innerH * (1 - t)}
+                        stroke="#222" strokeWidth="1" />
+                    ))}
+                    {[0, 0.25, 0.5, 0.75, 1].map(t => (
+                      <text key={t} x={PAD - 2} y={PAD + innerH * (1 - t) + 4} textAnchor="end"
+                        fill="#444" fontSize="9">{Math.round(maxRt * t)}</text>
+                    ))}
+                    {/* Area fill */}
+                    <polyline
+                      points={`${PAD},${PAD + innerH} ${rtPoints} ${W - PAD},${PAD + innerH}`}
+                      fill="rgba(59,130,246,0.12)" stroke="none"
+                    />
+                    {/* Line */}
+                    <polyline points={rtPoints} fill="none" stroke="#3b82f6" strokeWidth="1.5" strokeLinejoin="round" />
+                    {/* Dots */}
+                    {rtRecs.map((r, i) => {
+                      const x = PAD + (i / Math.max(rtRecs.length - 1, 1)) * innerW
+                      const y = PAD + innerH - (r.responseTime! / maxRt) * innerH
+                      return <circle key={i} cx={x} cy={y} r="2.5" fill="#3b82f6" />
+                    })}
+                  </svg>
+                )}
+              </div>
+
+              {/* Last seen */}
+              {dev.lastSeen && (
+                <div className="mt-4 text-neutral-600 text-xs text-right">Последний онлайн: {dev.lastSeen}</div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Add modal */}
       {addOpen && (
