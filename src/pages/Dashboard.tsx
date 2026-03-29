@@ -70,6 +70,41 @@ export default function Dashboard() {
   const [newName, setNewName] = useState('')
   const [newType, setNewType] = useState<Device['type']>('workstation')
 
+  // sound
+  const [soundEnabled, setSoundEnabled] = useState(true)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const alarmIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const prevOfflineRef = useRef<Set<string>>(new Set())
+
+  const playBeep = useCallback(() => {
+    if (!audioCtxRef.current) audioCtxRef.current = new AudioContext()
+    const ctx = audioCtxRef.current
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(880, ctx.currentTime)
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3)
+    gain.gain.setValueAtTime(0.4, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.4)
+  }, [])
+
+  const stopAlarm = useCallback(() => {
+    if (alarmIntervalRef.current) {
+      clearInterval(alarmIntervalRef.current)
+      alarmIntervalRef.current = null
+    }
+  }, [])
+
+  const startAlarm = useCallback(() => {
+    if (alarmIntervalRef.current) return
+    playBeep()
+    alarmIntervalRef.current = setInterval(playBeep, 3000)
+  }, [playBeep])
+
   // drag state
   const dragRef = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number } | null>(null)
   // resize state
@@ -114,10 +149,23 @@ export default function Dashboard() {
     setLastUpdate(now())
   }
 
+  // React to offline devices
+  useEffect(() => {
+    const currentOffline = new Set(devices.filter(d => d.online === false).map(d => d.id))
+    const hasNewOffline = [...currentOffline].some(id => !prevOfflineRef.current.has(id))
+    prevOfflineRef.current = currentOffline
+
+    if (soundEnabled && currentOffline.size > 0) {
+      if (hasNewOffline) startAlarm()
+    } else {
+      stopAlarm()
+    }
+  }, [devices, soundEnabled, startAlarm, stopAlarm])
+
   useEffect(() => {
     pingDevices(devices)
     const interval = setInterval(() => setDevices(prev => { pingDevices(prev); return prev }), POLL_INTERVAL)
-    return () => clearInterval(interval)
+    return () => { clearInterval(interval); stopAlarm() }
   }, [])
 
   // Mouse drag
@@ -210,6 +258,20 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2">
           {lastUpdate && <span className="text-neutral-600 text-xs hidden sm:block">обновлено {lastUpdate}</span>}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const next = !soundEnabled
+              setSoundEnabled(next)
+              if (!next) stopAlarm()
+            }}
+            className={`border-neutral-700 h-8 text-xs transition-colors ${soundEnabled ? 'text-[#FF4D00] border-[#FF4D00]/50 hover:bg-[#FF4D00]/10 bg-transparent' : 'text-neutral-500 hover:bg-neutral-800 bg-transparent'}`}
+            title={soundEnabled ? 'Звук включён — нажмите для отключения' : 'Звук отключён'}
+          >
+            <Icon name={soundEnabled ? 'Volume2' : 'VolumeX'} size={13} className="mr-1" />
+            {soundEnabled ? 'Звук вкл' : 'Звук выкл'}
+          </Button>
           <Button size="sm" variant="outline" onClick={() => pingDevices(devices)} disabled={loading}
             className="border-neutral-700 text-white hover:bg-neutral-800 bg-transparent h-8 text-xs">
             <Icon name={loading ? 'Loader2' : 'RefreshCw'} size={13} className={`mr-1 ${loading ? 'animate-spin' : ''}`} />
