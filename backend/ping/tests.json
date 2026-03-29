@@ -1,0 +1,13 @@
+{
+  "tests": [
+    {
+      "name": "Ping single device",
+      "method": "POST",
+      "path": "/",
+      "body": "{\"devices\":[{\"ip\":\"8.8.8.8\",\"name\":\"Google DNS\"}]}",
+      "expectedStatus": 200,
+      "expectedBody": {"results": []},
+      "bodyMatcher": "partial"
+    }
+  ]
+}
