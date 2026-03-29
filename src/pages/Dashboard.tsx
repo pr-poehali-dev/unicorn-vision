@@ -66,11 +66,30 @@ const INITIAL_DEVICES: Device[] = [
   { id: '12', ip: '192.168.1.100', name: 'Камера Вход',     type: 'camera',      online: null, lastSeen: null, responseTime: null, x: 1000, y: 210,  w: 200, h: 130 },
 ]
 
+const LS_DEVICES = 'netmon_devices'
+const LS_HISTORY = 'netmon_history'
+
+function loadDevices(): Device[] {
+  try {
+    const raw = localStorage.getItem(LS_DEVICES)
+    if (raw) return JSON.parse(raw)
+  } catch (_) { /* ignore */ }
+  return INITIAL_DEVICES
+}
+
+function loadHistory(): Record<string, PingRecord[]> {
+  try {
+    const raw = localStorage.getItem(LS_HISTORY)
+    if (raw) return JSON.parse(raw)
+  } catch (_) { /* ignore */ }
+  return {}
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const canvasRef = useRef<HTMLDivElement>(null)
-  const [devices, setDevices] = useState<Device[]>(INITIAL_DEVICES)
-  const [history, setHistory] = useState<Record<string, PingRecord[]>>({})
+  const [devices, setDevices] = useState<Device[]>(loadDevices)
+  const [history, setHistory] = useState<Record<string, PingRecord[]>>(loadHistory)
   const [chartDeviceId, setChartDeviceId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<string | null>(null)
@@ -197,6 +216,15 @@ export default function Dashboard() {
     const interval = setInterval(() => setDevices(prev => { pingDevices(prev); return prev }), POLL_INTERVAL)
     return () => { clearInterval(interval); stopAlarm() }
   }, [])
+
+  // Persist devices & history to localStorage
+  useEffect(() => {
+    localStorage.setItem(LS_DEVICES, JSON.stringify(devices.map(d => ({ ...d, online: null, responseTime: null }))))
+  }, [devices])
+
+  useEffect(() => {
+    localStorage.setItem(LS_HISTORY, JSON.stringify(history))
+  }, [history])
 
   // Mouse drag
   const onDragStart = (e: React.MouseEvent, id: string) => {
